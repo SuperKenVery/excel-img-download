@@ -1,21 +1,19 @@
-import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.drawing.image import Image
 from openpyxl.utils import get_column_letter
-import requests
-from requests.adapters import HTTPAdapter
-from requests.packages.urllib3.util.retry import Retry
+import httpx
+from httpx_retries import RetryTransport, Retry
+import asyncio
 from io import BytesIO
 import os
-from urllib.parse import urlparse
 from pathlib import Path
 
 # --- 用户配置区 ---
 SOURCE_EXCEL_FILES = [
-    r'C:\Users\Lenovo\Desktop\BCG\女装-消费品\图片处理-polo.xlsx'
+    r'/Users/ken/Codes/hsy/excel-img-download/test/图片处理-polo.xlsx'
 ]  # 要处理的文件名列表
 
-URL_COLUMN_NAME = '商品主图'             # 包含图片链接的列名
+URL_COLUMN_NAMES = ['商品主图', '商品图片']             # 包含图片链接的列名
 IMAGE_INSERT_COLUMN_NAME = '图片预览'     # 新增的用于存放图片的列名
 
 # 设置图片在单元格中的尺寸 (可以根据需要调整)
@@ -23,7 +21,7 @@ MAX_IMAGE_WIDTH = 150  # 图片最大宽度 (像素)
 MAX_IMAGE_HEIGHT = 150 # 图片最大高度 (像素)
 # --- 配置区结束 ---
 
-def download_image(url):
+async def download_image(url):
     """
     下载图片并返回处理后的Image对象，使用指数退避重试机制
 
@@ -38,46 +36,32 @@ def download_image(url):
         print(f"跳过无效或空的URL: {url}")
         return None
 
+    retry = Retry(total=5)
+
     try:
-        # 创建带重试机制的session
-        session = requests.Session()
+        async with httpx.AsyncClient(transport=RetryTransport(retry=retry)) as client:
+            response = await client.get(url, timeout=5.0)
+            response.raise_for_status()  # 如果下载失败，会抛出异常
 
-        # 配置重试策略：最大重试3次，指数退避因子0.1，对5xx状态码和网络异常重试
-        retries = Retry(
-            total=3,
-            backoff_factor=0.1,
-            status_forcelist=[500, 502, 503, 504],
-            raise_on_status=False
-        )
+            # 将图片数据读入内存
+            image_data = BytesIO(response.content)
+            img = Image(image_data)
 
-        # 挂载适配器到session
-        adapter = HTTPAdapter(max_retries=retries)
-        session.mount('http://', adapter)
-        session.mount('https://', adapter)
+            # 计算缩放比例，保持纵横比
+            ratio = min(MAX_IMAGE_WIDTH / img.width, MAX_IMAGE_HEIGHT / img.height)
+            img.width = int(img.width * ratio)
+            img.height = int(img.height * ratio)
 
-        # 下载图片
-        response = session.get(url, timeout=5)
-        response.raise_for_status()  # 如果下载失败，会抛出异常
+            return img
 
-        # 将图片数据读入内存
-        image_data = BytesIO(response.content)
-        img = Image(image_data)
-
-        # 计算缩放比例，保持纵横比
-        ratio = min(MAX_IMAGE_WIDTH / img.width, MAX_IMAGE_HEIGHT / img.height)
-        img.width = img.width * ratio
-        img.height = img.height * ratio
-
-        return img
-
-    except requests.exceptions.RequestException as e:
+    except httpx.RequestError as e:
         print(f"下载图片失败: {e}")
         return None
     except Exception as e:
         print(f"处理图片时出错: {e}")
         return None
 
-def process_one_worksheet(ws):
+async def process_one_worksheet(ws):
     """
     处理单个工作表中的图片下载和插入
 
@@ -89,16 +73,17 @@ def process_one_worksheet(ws):
     # 1. 查找URL列的位置
     url_col_idx = None
     for cell in ws[1]:  # 第一行是标题行
-        if cell.value == URL_COLUMN_NAME:
-            url_col_idx = cell.column
-            break
+        for keyword in URL_COLUMN_NAMES:
+            if type(cell.value)==str and keyword in cell.value:
+                url_col_idx = cell.column
+                break
 
     # 检查URL列是否存在
     if url_col_idx is None:
-        print(f"工作表 '{ws.title}'：找不到名为 '{URL_COLUMN_NAME}' 的列，跳过此工作表。")
+        print(f"工作表 '{ws.title}'：找不到名为 '{URL_COLUMN_NAMES}' 的列，跳过此工作表。")
         return
 
-    print(f"工作表 '{ws.title}'：找到URL列 '{URL_COLUMN_NAME}' 在第 {url_col_idx} 列。")
+    print(f"工作表 '{ws.title}'：找到URL列 '{URL_COLUMN_NAMES}' 在第 {url_col_idx} 列。")
 
     # 2. 在URL列后插入新列
     image_col_idx = url_col_idx + 1
@@ -128,7 +113,7 @@ def process_one_worksheet(ws):
         target_cell = ws.cell(row=row_num, column=image_col_idx)
 
         # 下载图片
-        img = download_image(url)
+        img = await download_image(url)
 
         if img is None:
             print(f"工作表 '{ws.title}'：第 {row_num} 行：跳过无效或下载失败的URL。")
@@ -141,7 +126,7 @@ def process_one_worksheet(ws):
 
     print(f"工作表 '{ws.title}'：处理完成，共成功插入 {success_count} 张图片。")
 
-def process_one_excel_file(source: str, dest: str):
+async def process_one_excel_file(source: str, dest: str):
     """
     主函数：读取Excel，对每个工作表下载图片并插入，最后保存新文件。
     """
@@ -161,7 +146,7 @@ def process_one_excel_file(source: str, dest: str):
     # 2. 对每个工作表执行处理
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
-        process_one_worksheet(ws)
+        await process_one_worksheet(ws)
 
     # 3. 保存最终的Excel文件
     try:
@@ -170,12 +155,12 @@ def process_one_excel_file(source: str, dest: str):
     except Exception as e:
         print(f"保存最终文件时出错: {e}")
 
-def process_excel_files():
+async def process_excel_files():
     for src in SOURCE_EXCEL_FILES:
         filename = Path(src)
         dest = filename.parent / f"{filename.stem}-图片已下载.{filename.suffix}"
-        process_one_excel_file(src, str(dest))
+        await process_one_excel_file(src, str(dest))
 
 # --- 运行主函数 ---
 if __name__ == "__main__":
-    process_excel_files()
+    asyncio.run(process_excel_files())
