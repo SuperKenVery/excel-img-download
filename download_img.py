@@ -42,7 +42,7 @@ async def download_image(url):
 
     try:
         async with httpx.AsyncClient(transport=RetryTransport(retry=retry)) as client:
-            response = await client.get(url, timeout=10)
+            response = await client.get(url, timeout=60)
             response.raise_for_status()  # 如果下载失败，会抛出异常
 
             # 将图片数据读入内存
@@ -138,7 +138,7 @@ async def process_one_excel_file(source: str, dest: str):
     # 2. 对每个工作表执行处理
     total = len(wb.sheetnames)
     for idx, sheet_name in enumerate(wb.sheetnames):
-        logger.info(f"\n开始处理工作表: '{sheet_name}' ({idx+1}/{total})")
+        logger.info(f"开始处理工作表: '{sheet_name}' ({idx+1}/{total})")
         ws = wb[sheet_name]
         await process_one_worksheet(ws)
 
