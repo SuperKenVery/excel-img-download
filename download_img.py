@@ -8,10 +8,12 @@ from requests.packages.urllib3.util.retry import Retry
 from io import BytesIO
 import os
 from urllib.parse import urlparse
+from pathlib import Path
 
 # --- 用户配置区 ---
-SOURCE_EXCEL_FILE = r'C:\Users\Lenovo\Desktop\BCG\女装-消费品\图片处理-polo.xlsx'  # 替换成你的Excel文件名
-OUTPUT_EXCEL_FILE = r'C:\Users\Lenovo\Desktop\BCG\女装-消费品\图片处理结果-拉夫劳伦.xlsx' # 输出的新文件名
+SOURCE_EXCEL_FILES = [
+    r'C:\Users\Lenovo\Desktop\BCG\女装-消费品\图片处理-polo.xlsx'
+]  # 要处理的文件名列表
 
 URL_COLUMN_NAME = '商品主图'             # 包含图片链接的列名
 IMAGE_INSERT_COLUMN_NAME = '图片预览'     # 新增的用于存放图片的列名
@@ -139,18 +141,18 @@ def process_one_worksheet(ws):
 
     print(f"工作表 '{ws.title}'：处理完成，共成功插入 {success_count} 张图片。")
 
-def download_and_insert_images():
+def process_one_excel_file(source: str, dest: str):
     """
     主函数：读取Excel，对每个工作表下载图片并插入，最后保存新文件。
     """
     # 检查源文件是否存在
-    if not os.path.exists(SOURCE_EXCEL_FILE):
-        print(f"错误：源文件 '{SOURCE_EXCEL_FILE}' 不存在。请检查文件名和路径。")
+    if not os.path.exists(source):
+        print(f"错误：源文件 '{source}' 不存在。请检查文件名和路径。")
         return
 
     # 1. 使用openpyxl读取Excel数据
     try:
-        wb = load_workbook(SOURCE_EXCEL_FILE)
+        wb = load_workbook(source)
         print(f"成功读取Excel文件，包含 {len(wb.sheetnames)} 个工作表: {wb.sheetnames}")
     except Exception as e:
         print(f"读取Excel文件时出错: {e}")
@@ -163,11 +165,17 @@ def download_and_insert_images():
 
     # 3. 保存最终的Excel文件
     try:
-        wb.save(OUTPUT_EXCEL_FILE)
-        print(f"\n所有任务完成！结果已保存到 '{OUTPUT_EXCEL_FILE}'。")
+        wb.save(dest)
+        print(f"\n所有任务完成！结果已保存到 '{dest}'。")
     except Exception as e:
         print(f"保存最终文件时出错: {e}")
 
+def process_excel_files():
+    for src in SOURCE_EXCEL_FILES:
+        filename = Path(src)
+        dest = filename.parent / f"{filename.stem}-图片已下载.{filename.suffix}"
+        process_one_excel_file(src, str(dest))
+
 # --- 运行主函数 ---
 if __name__ == "__main__":
-    download_and_insert_images()
+    process_excel_files()
