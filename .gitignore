@@ -1,6 +1,7 @@
 /test/
 .DS_Store
 __pycache__/
+logs/*
 
 # pixi environments
 .pixi

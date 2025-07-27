@@ -8,7 +8,12 @@ from io import BytesIO
 import os
 from pathlib import Path
 from tqdm.asyncio import tqdm_asyncio
-from tqdm import tqdm
+from tqdm import tqdm, trange
+from loguru import logger
+
+logger.remove()
+logger.add(lambda msg: tqdm.write(msg, end=""), colorize=True)
+logger.add("logs/log-{time}.log")
 
 # --- 用户配置区 ---
 SOURCE_EXCEL_FILES = [
@@ -37,7 +42,7 @@ async def download_image(url):
 
     try:
         async with httpx.AsyncClient(transport=RetryTransport(retry=retry)) as client:
-            response = await client.get(url, timeout=5.0)
+            response = await client.get(url, timeout=10)
             response.raise_for_status()  # 如果下载失败，会抛出异常
 
             # 将图片数据读入内存
@@ -52,10 +57,10 @@ async def download_image(url):
             return img
 
     except httpx.RequestError as e:
-        tqdm.write(f"下载图片失败: {e}")
+        logger.exception(f"下载图片失败: {e}")
         return None
     except Exception as e:
-        tqdm.write(f"处理图片时出错: {e}")
+        logger.exception(f"处理图片时出错: {e}")
         return None
 
 async def process_one_worksheet(ws):
@@ -65,7 +70,6 @@ async def process_one_worksheet(ws):
     Args:
         ws: openpyxl的工作表对象
     """
-    print(f"\n开始处理工作表: '{ws.title}'")
 
     # 1. 查找URL列的位置
     url_col_idx = None
@@ -77,10 +81,9 @@ async def process_one_worksheet(ws):
 
     # 检查URL列是否存在
     if url_col_idx is None:
-        print(f"工作表 '{ws.title}'：找不到名为 '{URL_COLUMN_NAMES}' 的列，跳过此工作表。")
+        logger.error(f"工作表 '{ws.title}'：找不到名为 '{URL_COLUMN_NAMES}' 的列，跳过此工作表。")
         return
-
-    print(f"工作表 '{ws.title}'：找到URL列 '{URL_COLUMN_NAMES}' 在第 {url_col_idx} 列。")
+    logger.info(f"工作表 '{ws.title}'：找到URL列 '{URL_COLUMN_NAMES}' 在第 {url_col_idx} 列。")
 
     # 2. 在URL列后插入新列
     image_col_idx = url_col_idx + 1
@@ -92,32 +95,37 @@ async def process_one_worksheet(ws):
     # 4. 调整新列的宽度和行的高度
     image_col_letter = get_column_letter(image_col_idx)
     ws.column_dimensions[image_col_letter].width = MAX_IMAGE_WIDTH / 7  # 粗略转换像素到宽度单位
-    for i in range(2, ws.max_row + 1):  # 从第2行开始，因为第1行是标题
+    for i in trange(2, ws.max_row + 1, desc="设置表格行高", leave=False):  # 从第2行开始，因为第1行是标题
         ws.row_dimensions[i].height = MAX_IMAGE_HEIGHT * 0.75  # 粗略转换像素到高度单位
 
     # 5. 遍历每一行，下载并插入图片
-    print(f"工作表 '{ws.title}'：开始下载并插入图片...")
+    logger.info(f"工作表 '{ws.title}'：开始下载并插入图片...")
 
     download_tasks = [
         process_line(ws, line_idx, url_col_idx,image_col_idx )
         for line_idx in range(2, ws.max_row+1)
     ]
 
-    await tqdm_asyncio.gather(*download_tasks, desc=f"工作表{ws.title}")
+    results = await tqdm_asyncio.gather(*download_tasks, desc=f"工作表{ws.title}")
+    success_count, total = sum(results), len(results)
+    logger.info(f"工作表 '{ws.title}'：成功{success_count}行, 总共{total}行")
 
-async def process_line(worksheet, line_idx, src_col_idx, dst_col_idx):
+
+async def process_line(worksheet, line_idx, src_col_idx, dst_col_idx) -> bool:
     url_cell = worksheet.cell(row=line_idx, column=src_col_idx)
     url = url_cell.value
     if url is None or url=="":
-        tqdm.write(f"工作表 '{worksheet.title}'：第 {line_idx} 行：跳过空的URL。")
+        logger.warning(f"工作表 '{worksheet.title}'：第 {line_idx} 行：跳过空的URL。")
+        return False
 
     img = await download_image(url)
     if img is None:
-        tqdm.write(f"工作表 '{worksheet.title}'：第 {line_idx} 行：跳过无效或下载失败的URL。")
-        return
+        logger.error(f"工作表 '{worksheet.title}'：第 {line_idx} 行：跳过无效或下载失败的URL。")
+        return False
 
     target_cell = worksheet.cell(row=line_idx, column=dst_col_idx)
     worksheet.add_image(img, target_cell.coordinate)
+    return True
 
 async def process_one_excel_file(source: str, dest: str):
     """
@@ -125,27 +133,31 @@ async def process_one_excel_file(source: str, dest: str):
     """
     # 1. 使用openpyxl读取Excel数据
     wb = load_workbook(source)
-    print(f"成功读取Excel文件，包含 {len(wb.sheetnames)} 个工作表: {wb.sheetnames}")
+    logger.info(f"成功读取Excel文件，包含 {len(wb.sheetnames)} 个工作表: {wb.sheetnames}")
 
     # 2. 对每个工作表执行处理
-    for sheet_name in wb.sheetnames:
+    total = len(wb.sheetnames)
+    for idx, sheet_name in enumerate(wb.sheetnames):
+        logger.info(f"\n开始处理工作表: '{sheet_name}' ({idx+1}/{total})")
         ws = wb[sheet_name]
         await process_one_worksheet(ws)
 
     # 3. 保存最终的Excel文件
     try:
+        logger.info(f"正在保存……")
         wb.save(dest)
-        print(f"\n所有任务完成！结果已保存到 '{dest}'。")
+        logger.info(f"\n所有任务完成！结果已保存到 '{dest}'。")
     except Exception as e:
-        print(f"保存最终文件时出错: {e}")
+        logger.exception(f"保存最终文件时出错: {e}")
 
 async def process_excel_files():
     for src in SOURCE_EXCEL_FILES:
         filename = Path(src)
         dest = filename.parent / f"{filename.stem}-图片已下载{filename.suffix}"
-        print(f"正在处理{src}")
+        logger.info(f"正在处理{src}")
         await process_one_excel_file(src, str(dest))
 
 # --- 运行主函数 ---
 if __name__ == "__main__":
     asyncio.run(process_excel_files())
+    # asyncio.run(download_image('https://aaa'))
