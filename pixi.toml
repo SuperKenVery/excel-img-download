@@ -1,0 +1,14 @@
+[workspace]
+authors = ["ken <hidden@a.com>"]
+channels = ["conda-forge"]
+name = "download img"
+platforms = ["win-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+pandas = ">=2.3.1,<3"
+openpyxl = ">=3.1.5,<4"
+requests = ">=2.32.4,<3"
+pillow = ">=11.3.0,<12"
