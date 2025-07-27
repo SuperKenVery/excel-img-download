@@ -12,6 +12,7 @@ openpyxl = ">=3.1.5,<4"
 requests = ">=2.32.4,<3"
 pillow = ">=11.3.0,<12"
 httpx = ">=0.28.1,<0.29"
+tqdm = ">=4.67.1,<5"
 
 [pypi-dependencies]
 httpx-retries = ">=0.4.0, <0.5"

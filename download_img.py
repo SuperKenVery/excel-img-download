@@ -7,6 +7,8 @@ import asyncio
 from io import BytesIO
 import os
 from pathlib import Path
+from tqdm.asyncio import tqdm_asyncio
+from tqdm import tqdm
 
 # --- 用户配置区 ---
 SOURCE_EXCEL_FILES = [
@@ -31,11 +33,6 @@ async def download_image(url):
     Returns:
         Image: 处理后的Image对象，如果下载失败返回None
     """
-    # 检查URL是否有效
-    if not url or not str(url).startswith('http'):
-        print(f"跳过无效或空的URL: {url}")
-        return None
-
     retry = Retry(total=5)
 
     try:
@@ -55,10 +52,10 @@ async def download_image(url):
             return img
 
     except httpx.RequestError as e:
-        print(f"下载图片失败: {e}")
+        tqdm.write(f"下载图片失败: {e}")
         return None
     except Exception as e:
-        print(f"处理图片时出错: {e}")
+        tqdm.write(f"处理图片时出错: {e}")
         return None
 
 async def process_one_worksheet(ws):
@@ -91,57 +88,44 @@ async def process_one_worksheet(ws):
 
     # 3. 设置新列的标题
     ws.cell(row=1, column=image_col_idx).value = IMAGE_INSERT_COLUMN_NAME
-    print(f"工作表 '{ws.title}'：已在第 {url_col_idx} 列后插入新列 '{IMAGE_INSERT_COLUMN_NAME}'。")
 
     # 4. 调整新列的宽度和行的高度
     image_col_letter = get_column_letter(image_col_idx)
     ws.column_dimensions[image_col_letter].width = MAX_IMAGE_WIDTH / 7  # 粗略转换像素到宽度单位
     for i in range(2, ws.max_row + 1):  # 从第2行开始，因为第1行是标题
         ws.row_dimensions[i].height = MAX_IMAGE_HEIGHT * 0.75  # 粗略转换像素到高度单位
-    print(f"工作表 '{ws.title}'：已调整图片列的单元格大小。")
 
     # 5. 遍历每一行，下载并插入图片
     print(f"工作表 '{ws.title}'：开始下载并插入图片...")
-    success_count = 0
 
-    for row_num in range(2, ws.max_row + 1):  # 从第2行开始，因为第1行是标题
-        # 获取URL
-        url_cell = ws.cell(row=row_num, column=url_col_idx)
-        url = url_cell.value
+    download_tasks = [
+        process_line(ws, line_idx, url_col_idx,image_col_idx )
+        for line_idx in range(2, ws.max_row+1)
+    ]
 
-        # 目标单元格（图片插入位置）
-        target_cell = ws.cell(row=row_num, column=image_col_idx)
+    await tqdm_asyncio.gather(*download_tasks, desc=f"工作表{ws.title}")
 
-        # 下载图片
-        img = await download_image(url)
+async def process_line(worksheet, line_idx, src_col_idx, dst_col_idx):
+    url_cell = worksheet.cell(row=line_idx, column=src_col_idx)
+    url = url_cell.value
+    if url is None or url=="":
+        print(f"工作表 '{worksheet.title}'：第 {line_idx} 行：跳过空的URL。")
 
-        if img is None:
-            print(f"工作表 '{ws.title}'：第 {row_num} 行：跳过无效或下载失败的URL。")
-            continue
+    img = await download_image(url)
+    if img is None:
+        print(f"工作表 '{worksheet.title}'：第 {line_idx} 行：跳过无效或下载失败的URL。")
+        return
 
-        # 将图片添加到工作表
-        ws.add_image(img, target_cell.coordinate)
-        print(f"工作表 '{ws.title}'：第 {row_num} 行：成功插入图片。")
-        success_count += 1
-
-    print(f"工作表 '{ws.title}'：处理完成，共成功插入 {success_count} 张图片。")
+    target_cell = worksheet.cell(row=line_idx, column=dst_col_idx)
+    worksheet.add_image(img, target_cell.coordinate)
 
 async def process_one_excel_file(source: str, dest: str):
     """
     主函数：读取Excel，对每个工作表下载图片并插入，最后保存新文件。
     """
-    # 检查源文件是否存在
-    if not os.path.exists(source):
-        print(f"错误：源文件 '{source}' 不存在。请检查文件名和路径。")
-        return
-
     # 1. 使用openpyxl读取Excel数据
-    try:
-        wb = load_workbook(source)
-        print(f"成功读取Excel文件，包含 {len(wb.sheetnames)} 个工作表: {wb.sheetnames}")
-    except Exception as e:
-        print(f"读取Excel文件时出错: {e}")
-        return
+    wb = load_workbook(source)
+    print(f"成功读取Excel文件，包含 {len(wb.sheetnames)} 个工作表: {wb.sheetnames}")
 
     # 2. 对每个工作表执行处理
     for sheet_name in wb.sheetnames:
@@ -158,7 +142,8 @@ async def process_one_excel_file(source: str, dest: str):
 async def process_excel_files():
     for src in SOURCE_EXCEL_FILES:
         filename = Path(src)
-        dest = filename.parent / f"{filename.stem}-图片已下载.{filename.suffix}"
+        dest = filename.parent / f"{filename.stem}-图片已下载{filename.suffix}"
+        print(f"正在处理{src}")
         await process_one_excel_file(src, str(dest))
 
 # --- 运行主函数 ---
