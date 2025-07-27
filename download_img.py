@@ -109,11 +109,11 @@ async def process_line(worksheet, line_idx, src_col_idx, dst_col_idx):
     url_cell = worksheet.cell(row=line_idx, column=src_col_idx)
     url = url_cell.value
     if url is None or url=="":
-        print(f"工作表 '{worksheet.title}'：第 {line_idx} 行：跳过空的URL。")
+        tqdm.write(f"工作表 '{worksheet.title}'：第 {line_idx} 行：跳过空的URL。")
 
     img = await download_image(url)
     if img is None:
-        print(f"工作表 '{worksheet.title}'：第 {line_idx} 行：跳过无效或下载失败的URL。")
+        tqdm.write(f"工作表 '{worksheet.title}'：第 {line_idx} 行：跳过无效或下载失败的URL。")
         return
 
     target_cell = worksheet.cell(row=line_idx, column=dst_col_idx)
